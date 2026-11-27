@@ -3,19 +3,24 @@ package com.example.jobfilter
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.ComponentName
 import android.content.Context
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
 import android.speech.tts.TextToSpeech
 import androidx.core.app.NotificationCompat
 import java.util.Locale
+import java.util.concurrent.Executors
 
 class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
     private var tts: TextToSpeech? = null
-    private var ttsReady = false
+    @Volatile private var ttsReady = false
     private var lastSig = ""
     private var lastTime = 0L
     private var nid = 1000
+    // satu thread berasingan: carian koordinat (rangkaian) tak sekat, dan susunan job kekal
+    private val worker = Executors.newSingleThreadExecutor()
 
     override fun onCreate() {
         super.onCreate()
@@ -34,15 +39,14 @@ class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
     }
 
     override fun onListenerDisconnected() {
-        requestRebind(android.content.ComponentName(this, JobListener::class.java))
+        requestRebind(ComponentName(this, JobListener::class.java))
     }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val pkg = sbn.packageName
         if (pkg == packageName) return
         if (!pkg.contains("lalamove", true) && !pkg.contains("huolala", true)) return
-        val prefs = Prefs(this)
-        if (!prefs.enabled) return
+        if (!Prefs(this).enabled) return
 
         val ex = sbn.notification.extras
         val job = Parser.parse(
@@ -56,29 +60,62 @@ class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
         if (sig == lastSig && now - lastTime < 8000) return
         lastSig = sig; lastTime = now
 
-        val reason = JobFilter.check(job, prefs)
-        prefs.addLog(job, reason)
+        val open: PendingIntent? = sbn.notification.contentIntent
+            ?: packageManager.getLaunchIntentForPackage(pkg)?.let {
+                PendingIntent.getActivity(this, 0, it, PendingIntent.FLAG_IMMUTABLE)
+            }
+        worker.execute { try { handle(job, open, sig) } catch (e: Exception) { } }
+    }
+
+    private fun handle(job: Job, open: PendingIntent?, sig: String) {
+        val prefs = Prefs(this)
+
+        // ---- job mahal: RM mutlak, atau RM per km (jarak anggaran) ----
+        var premium = false
+        var km: Double? = null
+        if (prefs.premiumOn) {
+            if (prefs.premAbs > 0f && job.price >= prefs.premAbs) premium = true
+            if (!premium && prefs.premPerKm > 0f) {
+                km = Geo.distanceKm(this, job.pickup, job.drop, prefs.roadFactor.toDouble())
+                if (km != null && km >= 0.5 && job.price / km >= prefs.premPerKm) premium = true
+            }
+        }
+
+        val reason = JobFilter.check(job, prefs, premium)
+        val fav = JobFilter.isFav(job, prefs)
+        LogDb.get(this).add(job, reason, fav, km, premium)
         if (reason != null) return
 
-        val price = if (job.price % 1.0 == 0.0) job.price.toInt().toString() else "%.2f".format(job.price)
+        val price = String.format(Locale.US, "%.2f", job.price)
+        val kind = if (job.scheduled) "Scheduled" else "Immediate"
+
         if (prefs.notify) {
+            var body = "${job.pickup} > ${job.drop}"
+            if (km != null && km >= 0.5) {
+                body += "\n~" + String.format(Locale.US, "%.1f", km) + " km, RM" + String.format(Locale.US, "%.1f", job.price / km) + "/km"
+            }
             val n = NotificationCompat.Builder(this, "jobs")
                 .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle("RM$price  [${job.tag}]")
-                .setContentText("${job.pickup} > ${job.drop}")
-                .setStyle(NotificationCompat.BigTextStyle().bigText("${job.pickup} > ${job.drop}"))
+                .setContentTitle("${if (premium) "MAHAL " else ""}${if (fav) "★ " else ""}RM$price  $kind")
+                .setContentText(body.substringBefore('\n'))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(body))
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setContentIntent(open)
                 .setAutoCancel(true)
                 .build()
             (getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).notify(nid++, n)
         }
         if (prefs.speak && ttsReady) {
-            // QUEUE_ADD = beratur bila notifikasi masuk laju
-            tts?.speak("${job.pickup}. ${job.drop}. $price ringgit", TextToSpeech.QUEUE_ADD, null, sig)
+            // sebut ringgit sahaja (tanpa sen); QUEUE_ADD = beratur bila job masuk laju
+            val ringgit = Math.round(job.price)
+            val say = "${if (premium) "Mahal. " else ""}${if (fav) "Favorit. " else ""}${job.pickup}. ${job.drop}. $ringgit ringgit"
+            tts?.setSpeechRate(prefs.speechRate)
+            tts?.speak(Speech.fix(say), TextToSpeech.QUEUE_ADD, null, sig)
         }
     }
 
     override fun onDestroy() {
+        worker.shutdown()
         tts?.shutdown()
         super.onDestroy()
     }
