@@ -70,6 +70,7 @@ class MainActivity : Activity() {
         })
 
         swEnabled = Switch(this).apply { text = "App aktif"; isChecked = prefs.enabled }
+        swEnabled.setOnCheckedChangeListener { _, c -> prefs.enabled = c }
         root.addView(swEnabled)
 
         root.addView(label("Jenis order"))
@@ -228,6 +229,15 @@ class MainActivity : Activity() {
         tvLog = TextView(this).apply { textSize = 13f }
         root.addView(tvLog)
         root.addView(Button(this).apply { text = "Muat lagi"; setOnClickListener { logLimit += 50; refresh() } })
+        root.addView(Button(this).apply {
+            text = "Eksport log ke CSV"
+            setOnClickListener {
+                startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                    addCategory(Intent.CATEGORY_OPENABLE); type = "text/csv"
+                    putExtra(Intent.EXTRA_TITLE, "job_log_" + SimpleDateFormat("yyyyMMdd_HHmm", Locale.US).format(Date()) + ".csv")
+                }, 43)
+            }
+        })
         root.addView(Button(this).apply { text = "Kosongkan log"; setOnClickListener { LogDb.get(this@MainActivity).clear(); refresh() } })
         updateRangeUi(false)
     }
@@ -235,7 +245,33 @@ class MainActivity : Activity() {
     override fun onActivityResult(req: Int, res: Int, data: Intent?) {
         super.onActivityResult(req, res, data)
         val uri = data?.data ?: return
-        if (req != 42 || res != RESULT_OK) return
+        if (res != RESULT_OK) return
+        if (req == 43) {
+            Thread {
+                try {
+                    val rows = LogDb.get(this).query(false, Int.MAX_VALUE).reversed()   // lama ke baru
+                    val f = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US)
+                    fun q(s: String) = "\"" + s.replace("\"", "\"\"") + "\""
+                    contentResolver.openOutputStream(uri)!!.bufferedWriter().use { w ->
+                        w.write("masa,jenis,pickup,drop,rm_jumlah,bonus,km,rm_per_km,lulus,mahal,favorit,sebab\n")
+                        for (r in rows) {
+                            val km = if (r.km >= 0.5) String.format(Locale.US, "%.1f", r.km) else ""
+                            val perKm = if (r.km >= 0.5) String.format(Locale.US, "%.2f", r.rm / r.km) else ""
+                            w.write(listOf(
+                                q(f.format(Date(r.t))), if (r.sched) "Scheduled" else "Immediate", q(r.p), q(r.d),
+                                String.format(Locale.US, "%.2f", r.rm), String.format(Locale.US, "%.2f", r.bonus), km, perKm,
+                                if (r.ok) "1" else "0", if (r.prem) "1" else "0", if (r.fav) "1" else "0", q(r.reason)
+                            ).joinToString(",") + "\n")
+                        }
+                    }
+                    runOnUiThread { toast("Eksport siap: ${rows.size} baris") }
+                } catch (e: Exception) {
+                    runOnUiThread { toast("Gagal eksport: ${e.message}") }
+                }
+            }.start()
+            return
+        }
+        if (req != 42) return
         Thread {
             try {
                 val lines = contentResolver.openInputStream(uri)!!.bufferedReader().use { it.readLines() }
@@ -335,7 +371,6 @@ class MainActivity : Activity() {
     }
 
     private fun save() {
-        prefs.enabled = swEnabled.isChecked
         prefs.allowDelivery = cbDelivery.isChecked
         prefs.allowScheduled = cbScheduled.isChecked
         prefs.minRm = etMin.text.toString().toFloatOrNull() ?: 0f
@@ -354,6 +389,7 @@ class MainActivity : Activity() {
 
     private fun refresh() {
         val on = Settings.Secure.getString(contentResolver, "enabled_notification_listeners")?.contains(packageName) == true
+        swEnabled.isChecked = prefs.enabled
         tvStatus.text = if (on) "Notification access: AKTIF ✔" else "Notification access: BELUM — tekan butang bawah"
         tvImport.text = "Senarai: ${prefs.pickupNames.size} pickup, ${prefs.dropNames.size} drop"
         btnPickup.text = "Pilih Pickup (${prefs.selPickup.size} dipilih, ★ ${prefs.favPickup.size})"
