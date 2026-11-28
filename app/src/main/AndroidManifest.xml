@@ -4,8 +4,8 @@
     <application
         android:label="Job Filter"
         android:icon="@android:drawable/sym_def_app_icon"
-        android:theme="@android:style/Theme.DeviceDefault.Light.DarkActionBar">
-        <activity android:name=".MainActivity" android:exported="true">
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        <activity android:name=".MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
