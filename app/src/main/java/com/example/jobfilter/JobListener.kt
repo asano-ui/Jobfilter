@@ -148,10 +148,9 @@ class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
         var km: Double? = null
         if (prefs.premiumOn) {
             if (prefs.premAbs > 0f && job.price >= prefs.premAbs) premium = true
-            if (!premium && prefs.premPerKm > 0f) {
-                km = Geo.distanceKm(this, job.pickup, job.drop, prefs.roadFactor.toDouble())
-                if (km != null && km >= 0.5 && job.price / km >= prefs.premPerKm) premium = true
-            }
+            // jarak dikira juga bila mahal ikut RM mutlak, supaya RM per km boleh disebut
+            if (premium || prefs.premPerKm > 0f) km = Geo.distanceKm(this, job.pickup, job.drop, prefs.roadFactor.toDouble())
+            if (!premium && km != null && km >= 0.5 && prefs.premPerKm > 0f && job.price / km >= prefs.premPerKm) premium = true
         }
 
         val reason = JobFilter.check(job, prefs, premium)
@@ -186,8 +185,14 @@ class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
             nm.notify(id, b.build())
         }
         if (prefs.speak && ttsReady) {
-            // sebut nilai sahaja (tanpa sen dan tanpa perkataan ringgit); QUEUE_ADD = beratur bila job masuk laju
-            val say = "${if (premium) "Mahal. " else ""}${if (fav) "Favorit. " else ""}${job.pickup}. ${job.drop}. ${Math.round(job.price)}"
+            // tanpa sen dan tanpa perkataan ringgit; QUEUE_ADD = beratur bila job masuk laju
+            val value = Math.round(job.price)
+            // susunan sama untuk semua job: nilai RM, lokasi; job mahal tambah RM per kilometer
+            // (kalau jarak tak diketahui: "Mahal"); favorit disebut di hujung
+            val tail = if (premium) {
+                ". " + (if (km != null && km >= 0.5) "${Math.round(job.price / km)} per kilometer" else "Mahal")
+            } else ""
+            val say = "$value. ${job.pickup}. ${job.drop}$tail${if (fav) ". Favorit" else ""}"
             tts?.setSpeechRate(prefs.speechRate)
             tts?.speak(Speech.fix(say), TextToSpeech.QUEUE_ADD, null, sig)
         }
