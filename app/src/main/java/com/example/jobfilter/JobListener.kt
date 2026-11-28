@@ -26,6 +26,7 @@ class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
         const val ACT_ABAI = "com.example.jobfilter.ABAI"
         const val WINDOW = 15 * 60 * 1000L   // job sama dianggap baru selepas 15 minit tanpa notifikasi
         const val MUTE = 30 * 60 * 1000L     // "Abai": senyap laluan ini 30 minit
+        const val KM_WORD = "kilo meter"      // ejaan untuk suara; "kilometer" dieja huruf demi huruf oleh sesetengah suara
         val muted = ConcurrentHashMap<String, Long>()
     }
 
@@ -190,7 +191,7 @@ class JobListener : NotificationListenerService(), TextToSpeech.OnInitListener {
             // susunan sama untuk semua job: nilai RM, lokasi; job mahal tambah RM per kilometer
             // (kalau jarak tak diketahui: "Mahal"); favorit disebut di hujung
             val tail = if (premium) {
-                ". " + (if (km != null && km >= 0.5) "${Math.round(job.price / km)} per kilometer" else "Mahal")
+                ". " + (if (km != null && km >= 0.5) "${Math.round(job.price / km)} per $KM_WORD" else "Mahal")
             } else ""
             val say = "$value. ${job.pickup}. ${job.drop}$tail${if (fav) ". Favorit" else ""}"
             tts?.setSpeechRate(prefs.speechRate)
