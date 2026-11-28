@@ -189,6 +189,13 @@ class LogDb private constructor(ctx: Context) : SQLiteOpenHelper(ctx.application
             it.moveToFirst(); it.getInt(0)
         }
 
+    /** [lulus, diabaikan, mahal-lulus] sejak masa tertentu */
+    fun stats(since: Long): IntArray =
+        readableDatabase.rawQuery(
+            "SELECT COALESCE(SUM(ok=1),0), COALESCE(SUM(ok=0),0), COALESCE(SUM(ok=1 AND prem=1),0) FROM log WHERE t>=?",
+            arrayOf(since.toString())
+        ).use { it.moveToFirst(); intArrayOf(it.getInt(0), it.getInt(1), it.getInt(2)) }
+
     fun clear() { writableDatabase.execSQL("DELETE FROM log") }
 }
 
